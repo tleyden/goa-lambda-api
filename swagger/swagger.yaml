@@ -1,0 +1,64 @@
+consumes:
+- application/json
+- application/xml
+- application/gob
+- application/x-gob
+definitions:
+  Hello:
+    description: Hello World (default view)
+    example:
+      hello: Voluptatem voluptates ipsum alias.
+    properties:
+      hello:
+        description: What was said
+        example: Voluptatem voluptates ipsum alias.
+        type: string
+    required:
+    - hello
+    title: 'Mediatype identifier: application/vnd.hello+json; view=default'
+    type: object
+host: localhost:8080
+info:
+  description: Goa API powered by AWS Lambda and API Gateway
+  title: Goa Server API Example
+  version: ""
+paths:
+  /hello/{whatToSay}:
+    get:
+      description: Say Hello
+      operationId: hello#show
+      parameters:
+      - description: What To Say Hello To
+        in: path
+        name: whatToSay
+        required: true
+        type: string
+      produces:
+      - application/vnd.hello+json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/Hello'
+        "404":
+          description: Not Found
+      schemes:
+      - http
+      summary: show hello
+      tags:
+      - hello
+produces:
+- application/json
+- application/xml
+- application/gob
+- application/x-gob
+responses:
+  NotFound:
+    description: Not Found
+  OK:
+    description: OK
+    schema:
+      $ref: '#/definitions/Hello'
+schemes:
+- http
+swagger: "2.0"

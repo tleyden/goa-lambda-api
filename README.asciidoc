@@ -1,0 +1,497 @@
+[%hardbreaks]
+
+= 🎩 Deploy Goa API backend on AWS Lambda
+:toc: left
+:toclevels: 3
+
+link:https://github.com/goadesign/goa[Goa] is a powerful way to to build REST API backends in Go using it's powerful design langugage and OpenAPI Spec generation capabilities.  
+
+It's possible to deploy your Goa backend on AWS Lambda, with help from link:https://github.com/eawsy/aws-lambda-go-shim[eawsy/aws-lambda-go-shim] and link:https://github.com/eawsy/aws-lambda-go-net[aws-lambda-go-net].  
+
+This guide walks you through the entire process.
+
+== Installation
+
+=== Deploy aws-lambda-go-shim 
+
+NOTE: You might want to check the link:https://github.com/eawsy/aws-lambda-go-shim[latest instructions], in case these are out of date.
+
+==== Create a project directory
+
+```
+mkdir serverless-forms; cd serverless-forms
+```
+
+Replace `serverless-forms` with your own project name.
+
+==== Get dependencies
+
+This assumes you have Go 1.8 installed.
+
+```
+docker pull eawsy/aws-lambda-go-shim:latest
+go get -u -d github.com/eawsy/aws-lambda-go-core/...
+wget -O Makefile https://git.io/vytH8
+```
+
+==== Add lambda function handler
+
+Create a new file `handler.go` in your project directory with the following content:
+
+```
+package main
+
+import (
+	"encoding/json"
+
+	"github.com/eawsy/aws-lambda-go-core/service/lambda/runtime"
+)
+
+func Handle(evt json.RawMessage, ctx *runtime.Context) (interface{}, error) {
+	return "Hello, World!", nil
+}
+
+```
+
+This is the function that will be called back by AWS Lambda (through the shim)
+
+==== Build handler.zip
+
+Run make:
+
+```
+make
+```
+
+and now you should have a new file called `handler.zip`
+
+```
+$ ls -alh handler.zip
+-rw-r--r--@ 1 tleyden  staff   1.5M Jun  4 10:20 handler.zip
+```
+
+==== Create AWS Lambda IAM Role
+
+NOTE: you can also do this manually via the AWS Web UI, and if you've already created an AWS Lambda function before, you already have this role and can skip this step.
+
+```
+cat > trust-policy.json <<EOL
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Service": "lambda.amazonaws.com"
+    },
+    "Action": "sts:AssumeRole"
+  }]
+}
+EOL
+
+aws iam create-role --role-name lambda_basic_execution --assume-role-policy-document file://trust-policy.json
+aws iam attach-role-policy --role-name lambda_basic_execution --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+```
+
+==== Deploy to AWS Lambda
+
+Find your AWS account number from the AWS Web Admin, and replace **19382281** below with your AWS account number.
+
+```
+AWS_ACCOUNT_NUMBER=19382281
+```
+
+Deploy the Lambda function:
+
+```
+aws lambda create-function \
+  --role arn:aws:iam::$AWS_ACCOUNT_NUMBER:role/lambda_basic_execution \
+  --function-name preview-go \
+  --zip-file fileb://handler.zip \
+  --runtime python2.7 \
+  --handler handler.Handle
+```
+
+==== Verify
+
+1. In the AWS Web Admin, go to the Lambda section 
+2. Choose the `preview-go` lambda function
+3. Under **Actions**, select **Test Function**
+4. Hit the **Save and Test** button
+5. Under "The area below shows the result returned by your function execution.", you should see "Hello World!" -- this means it worked!
+
+=== Deploy aws-lambda-go-shim behind API Gateway
+
+NOTE: The latest version of these docs is available on the link:https://github.com/eawsy/aws-lambda-go-net[eawsy/aws-lambda-go-net]
+
+==== Get dependencies
+
+```
+go get -u -d github.com/eawsy/aws-lambda-go-net/...
+``` 
+
+==== Update handler.go
+
+```
+package main
+
+import (
+	"net/http"
+
+	"github.com/eawsy/aws-lambda-go-net/service/lambda/runtime/net"
+	"github.com/eawsy/aws-lambda-go-net/service/lambda/runtime/net/apigatewayproxy"
+)
+
+// Handle is the exported handler called by AWS Lambda.
+var Handle apigatewayproxy.Handler
+
+func init() {
+	ln := net.Listen()
+
+	// Amazon API Gateway binary media types are supported out of the box.
+	// If you don't send or receive binary data, you can safely set it to nil.
+	Handle = apigatewayproxy.New(ln, []string{"image/png"}).Handle
+
+	// Any Go framework complying with the Go http.Handler interface can be used.
+	// This includes, but is not limited to, Vanilla Go, Gin, Echo, Gorrila, Goa, etc.
+	go http.Serve(ln, http.HandlerFunc(handle))
+}
+
+func handle(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("Hello, World!"))
+}
+```
+
+==== Rebuild handler.zip
+
+```
+make
+```
+
+==== Create SAML (AWS Serverless Application Model) file
+
+Create a new file named `aws_serverless_application_model.yaml` with the following content:
+
+```
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.Handle
+      Runtime: python2.7
+      CodeUri: ./handler.zip
+      Events:
+        ApiRoot:
+          Type: Api
+          Properties:
+            Path: /
+            Method: ANY
+        ApiGreedy:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+Outputs:
+  URL:
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+```
+
+==== Create an S3 bucket
+
+Create a new S3 bucket which will hold your packaged cloudformation templates.
+
+```
+$ aws s3api create-bucket --bucket my-bucket
+$ S3_BUCKET="my-bucket"
+```
+
+NOTE: see aws s3api docs, this might need more parameters.  
+
+==== Deploy to AWS Lambda
+
+Upload the packaged cloudformation template to s3:
+
+```
+aws cloudformation package \
+  --template-file aws_serverless_application_model.yaml \
+  --output-template-file aws_serverless_application_model.out.yaml \
+  --s3-bucket $S3_BUCKET
+```
+
+Choose a name for your cloudformation stack
+
+```
+CLOUDFORMATION_STACK_NAME="HelloServerlessGolangApi"
+```
+
+Deploy the cloudformation stack
+
+```
+aws cloudformation deploy \
+  --template-file aws_serverless_application_model.out.yaml \
+  --capabilities CAPABILITY_IAM \
+  --stack-name $CLOUDFORMATION_STACK_NAME \
+  --region us-east-1
+```
+
+==== Verify 
+
+Find out the URL of the API Gateway endpoint via Cloudformation Template outputs:
+
+```
+aws cloudformation describe-stacks \
+  --stack-name $CLOUDFORMATION_STACK_NAME \
+  --query Stacks[0].Outputs[0]
+```
+
+This will give you a URL like:
+
+```
+------------------------------------------------------------------------------
+|                               DescribeStacks                               |
++-----------+----------------------------------------------------------------+
+| OutputKey |                          OutputValue                           |
++-----------+----------------------------------------------------------------+
+|  URL      |  https://7phv3eeluk.execute-api.us-east-1.amazonaws.com/Prod   |
++-----------+----------------------------------------------------------------+
+```
+
+Now try to issue a curl request against it:
+
+```
+$ curl https://7phv3eeluk.execute-api.us-east-1.amazonaws.com/Prod
+Hello, World!
+```
+
+=== Generate Goa API backend
+
+==== Create design.go
+
+```
+package design
+
+import (
+	. "github.com/goadesign/goa/design"
+	. "github.com/goadesign/goa/design/apidsl"
+)
+
+var _ = API("HelloServerlessGoa", func() {
+	Title("Goa Server API Example")
+	Description("Goa API powered by AWS Lambda and API Gateway")
+	Scheme("http")
+	Host("localhost:8080")
+})
+
+var _ = Resource("hello", func() {
+	BasePath("/hello")
+	DefaultMedia(HelloMedia)
+
+	Action("show", func() {
+		Description("Say Hello")
+		Routing(GET("/:whatToSay"))
+		Params(func() {
+			Param("whatToSay", String, "What To Say Hello To")
+		})
+		Response(OK)
+		Response(NotFound)
+	})
+})
+
+var HelloMedia = MediaType("application/vnd.hello+json", func() {
+	Description("Hello World")
+	Attributes(func() {
+		Attribute("hello", String, "What was said")
+		Required("hello")
+	})
+	View("default", func() {
+		Attribute("hello")
+	})
+})
+
+```
+
+==== Generate goa code  
+
+Generate the controller, which we will customize:
+
+```
+goagen controller --force --pkg controller -d github.com/tleyden/serverless-forms/design -o ./controllers
+```
+
+and the remaining goa generated code, which we won't touch.
+
+```
+goagen app -d github.com/tleyden/serverless-forms/design -o ./goa-generated
+goagen client -d github.com/tleyden/serverless-forms/design -o ./goa-generated
+goagen swagger -d github.com/tleyden/serverless-forms/design -o ./goa-generated
+```
+
+Generate the `main` scaffolding:
+
+```
+goagen main -d github.com/tleyden/serverless-forms/design
+```
+
+and remove the `hello.go` which we don't need, since it's already in the `controllers` directory
+
+```
+rm hello.go
+```
+
+==== Goa fixups
+
+Sorry, this part is really ugly, I need to get in touch with the goa folks to try to make this cleaner.  Part of the issue is that I'm putting everything in the `goa-generated` directory, to keep the generated code separate, which breaks the package names.
+
+. Open `main.go` and
+.. Change the `app` package import to `goa-generated/app`
+.. Add this package import: `controller "github.com/tleyden/serverless-forms/controllers"`
+.. Change `c := NewHelloController(service)` -> `c := controller.NewHelloController(service)`
+. Open `controllers/hello.go` and change the `app` package import to `goa-generated/app`
+
+==== Run goa standalone server 
+
+```
+go run main.go
+```
+
+and you should see output:
+
+```
+2017/06/04 12:32:00 [INFO] mount ctrl=Hello action=Show route=GET /hello/:whatToSay
+2017/06/04 12:32:00 [INFO] listen transport=http addr=:8080
+```
+
+and if you curl:
+
+```
+$ curl localhost:8080/hello/foo
+{"hello":""}
+```
+
+==== Customize controller behavior
+
+Open `controllers/hello.go` and look for this line:
+
+```
+res := &app.Hello{}
+```
+
+and add a new line, so it's now:
+
+```
+res := &app.Hello{}
+res.Hello = ctx.WhatToSay
+```
+
+Now return the goa api server via `go run main.go`, and retry that curl request:
+
+```
+$ curl localhost:8080/hello/world
+{"hello":"world"}
+```
+
+and it now echos the parameter passed along the request path.
+
+=== Deploy Goa API backend to Lambda  
+
+==== Merge the handler.go and main.go files
+
+At this point there are two files that need to have their functionality merged:
+
+. `handler.go` -- this contains the Lambda / API Gateway stub code that was previously pushed up to AWS in a previous step
+. `main.go` -- this contains the goa REST API server 
+
+`handler.go` is deleted and it's functionality gets merged into `main.go` after some minor refactoring.  
+
+```
+//go:generate goagen bootstrap -d github.com/tleyden/serverless-forms/design
+
+package main
+
+import (
+	"net/http"
+
+	"github.com/eawsy/aws-lambda-go-net/service/lambda/runtime/net"
+	"github.com/eawsy/aws-lambda-go-net/service/lambda/runtime/net/apigatewayproxy"
+	"github.com/goadesign/goa"
+	"github.com/goadesign/goa/middleware"
+	controller "github.com/tleyden/serverless-forms/controllers"
+	"github.com/tleyden/serverless-forms/goa-generated/app"
+)
+
+func createGoaService() *goa.Service {
+
+	// Create service
+	service := goa.New("HelloServerlessGoa")
+
+	// Mount middleware
+	service.Use(middleware.RequestID())
+	service.Use(middleware.LogRequest(true))
+	service.Use(middleware.ErrorHandler(service, true))
+	service.Use(middleware.Recover())
+
+	// Mount "hello" controller
+	c := controller.NewHelloController(service)
+	app.MountHelloController(service, c)
+
+	return service
+}
+
+func main() {
+
+	service := createGoaService()
+
+	// Start service
+	if err := service.ListenAndServe(":8080"); err != nil {
+		service.LogError("startup", "err", err)
+	}
+
+}
+
+// Handle is the exported handler called by AWS Lambda.
+var Handle apigatewayproxy.Handler
+
+func init() {
+
+	ln := net.Listen()
+
+	// Amazon API Gateway Binary support out of the box.
+	Handle = apigatewayproxy.New(ln, nil).Handle
+
+	service := createGoaService()
+
+	// Any Go framework complying with the Go http.Handler interface can be used.
+	// This includes, but is not limited to, Vanilla Go, Gin, Echo, Gorrila, etc.
+	go http.Serve(ln, service.Mux)
+
+}
+
+```
+
+=== Deploy to AWS Lambda
+
+Re-run the same steps previously mentioned in <<Deploy aws-lambda-go-shim behind API Gateway>>
+
+```
+$ make 
+$ aws cloudformation package \
+  --template-file aws_serverless_application_model.yaml \
+  --output-template-file aws_serverless_application_model.out.yaml \
+  --s3-bucket $S3_BUCKET
+$ aws cloudformation deploy \
+  --template-file aws_serverless_application_model.out.yaml \
+  --capabilities CAPABILITY_IAM \
+  --stack-name $CLOUDFORMATION_STACK_NAME \
+  --region us-east-1
+$ aws cloudformation describe-stacks \
+  --stack-name $CLOUDFORMATION_STACK_NAME \
+  --query Stacks[0].Outputs[0]
+```
+
+=== Verify 
+
+```
+$ curl https://7phv3yvluk.execute-api.us-east-1.amazonaws.com/Prod/hello/serverless-goa-world
+{"hello":"serverless-goa-world"}
+```
