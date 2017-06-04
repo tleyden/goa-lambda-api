@@ -492,6 +492,6 @@ $ aws cloudformation describe-stacks \
 === Verify 
 
 ```
-$ curl https://7phv3yvluk.execute-api.us-east-1.amazonaws.com/Prod/hello/serverless-goa-world
+$ curl https://7phv3wewuk.execute-api.us-east-1.amazonaws.com/Prod/hello/serverless-goa-world
 {"hello":"serverless-goa-world"}
 ```
