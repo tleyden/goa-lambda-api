@@ -121,6 +121,8 @@ aws lambda create-function \
 
 === Deploy aws-lambda-go-shim behind API Gateway
 
+At this point, your Lambda function is deployed, but it is not yet accessible via a REST API call.  Putting it behind the AWS API Gateway via link:https://github.com/eawsy/aws-lambda-go-net[eawsy/aws-lambda-go-net] exposes a REST API endpoint.
+
 NOTE: The latest version of these docs is available on the link:https://github.com/eawsy/aws-lambda-go-net[eawsy/aws-lambda-go-net]
 
 ==== Get dependencies
